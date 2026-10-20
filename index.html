@@ -211,7 +211,7 @@ body {
 <body>
 
 <div class="header">
-  <span class="title">INPUT DISPLAY_v0.4</span>
+  <span class="title">INPUT DISPLAY_v0.5</span>
   <div class="status">
     <div class="status-dot" id="statusDot"></div>
     <span id="statusText">No gamepad</span>
@@ -488,8 +488,18 @@ window.addEventListener('gamepadconnected', e => {
 window.addEventListener('gamepaddisconnected', e => {
   if (e.gamepad.index === gamepadIndex) {
     gamepadIndex = -1;
-    currentEntry = null;
+    resetTrackersForGap();
     updateStatus(false);
+  }
+});
+document.addEventListener('visibilitychange', () => {
+  // Tab coming back into focus after being backgrounded: rAF was suspended for an
+  // unknown/unbounded stretch, so reset trackers and let lastTs fall back to the
+  // (1000/60) default on the next tick instead of computing one huge dt from the
+  // suspended-rAF gap (avoids double-handling the same gap via poll()'s own dt check).
+  if (!document.hidden) {
+    resetTrackersForGap();
+    lastTs = null;
   }
 });
 
@@ -639,6 +649,8 @@ function renderCurrent(input) {
   document.getElementById('bc-3K').style.opacity = b.k3 ? '1' : '0.15';
 }
 
+let lastRenderSig = null;
+
 function renderHistory() {
   const list = document.getElementById('histList');
   const entries = [];
@@ -646,12 +658,27 @@ function renderHistory() {
   for (const h of history) entries.push(h);
 
   if (entries.length === 0) {
-    list.innerHTML = '<div class="no-gp">Plug in your controller and press any button</div>';
+    if (lastRenderSig !== 'EMPTY') {
+      lastRenderSig = 'EMPTY';
+      list.innerHTML = '<div class="no-gp">Plug in your controller and press any button</div>';
+    }
     return;
   }
 
   const isP2 = side === '2P';
-  list.innerHTML = entries.slice(0, displayRows).map(e => {
+  const shown = entries.slice(0, displayRows);
+
+  // Dirty-check: only rebuild the DOM when something that actually affects
+  // the rendered output changed (incl. the latest entry's displayed duration
+  // tick), not on every rAF callback.
+  const sig = isP2 + '|' + displayRows + '|' + shown.map(e =>
+    e.input.dir + ':' + BTN_NAMES.filter(n => e.input.buttons[n]).join(',') + ':' +
+    (e.duration < 1000 ? Math.floor(e.duration) : -1) + ':' + (e.saFail || '')
+  ).join('|');
+  if (sig === lastRenderSig) return;
+  lastRenderSig = sig;
+
+  list.innerHTML = shown.map(e => {
     const rot      = DIR_ROT[e.input.dir] || 0;
     const dirEl    = e.input.dir === 5
       ? `<span style="width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:#ccc;font-size:12px;">·</span>`
@@ -664,7 +691,7 @@ function renderHistory() {
     // 1P: buttons flow left→right; 2P: buttons pushed right (toward direction)
     const btnsEl = `<span class="hist-btns" style="justify-content:${isP2 ? 'flex-end' : 'flex-start'}">${btnsHtml}</span>`;
 
-    const durText = e.duration < 1000 ? e.duration + 'f' : '...';
+    const durText = e.duration < 1000 ? Math.floor(e.duration) + 'f' : '...';
     // 1P: number right-aligned (toward direction); 2P: left-aligned (toward direction)
     const durEl   = `<span class="hist-dur" style="text-align:${isP2 ? 'left' : 'right'}">${durText}</span>`;
 
@@ -679,6 +706,20 @@ function renderHistory() {
 }
 
 function poll() {
+  const now = performance.now();
+  const dt  = (lastTs === null) ? (1000 / 60) : (now - lastTs);
+  let frameDelta;
+  if (dt > GAP_RESET_MS) {
+    // Large wall-clock gap (disconnect, backgrounded tab, stall): reset trackers and treat
+    // this tick as a single fresh sample. We have no basis to credit the gap itself as
+    // "held duration" or elapsed FSM time, since we don't know what happened during it.
+    resetTrackersForGap();
+    frameDelta = 1;
+  } else {
+    frameDelta = dt / (1000 / 60); // wall-clock elapsed, expressed as 60Hz-equivalent frames
+  }
+  lastTs = now;
+
   if (gamepadIndex < 0) {
     const gpads = navigator.getGamepads();
     for (let i = 0; i < gpads.length; i++) {
@@ -705,8 +746,8 @@ function poll() {
 
     if (dirRemapping !== null) {
       if (dirRemapCooldown > 0) {
-        dirRemapCooldown--;
-        if (dirRemapCooldown === 0) updateDirMappingUI(); // switch label to "Move!"
+        dirRemapCooldown -= frameDelta;
+        if (dirRemapCooldown <= 0) { dirRemapCooldown = 0; updateDirMappingUI(); } // switch label to "Move!"
       } else {
         // Find axis with largest movement from baseline
         let maxDelta = 0, maxAxis = -1;
@@ -718,16 +759,16 @@ function poll() {
         }
         let detected = false;
         if (maxAxis >= 0 && Math.abs(maxDelta) > 0.3) {
-          // Must hold same axis+sign for 15 frames to confirm (prevents gate wobble)
+          // Must hold same axis+sign for 15 frame-equivalents to confirm (prevents gate wobble)
           const sign = maxDelta > 0 ? 1 : -1;
           const key  = `${maxAxis}_${sign}`;
           if (dirRemapCandidate?.key === key) {
-            dirRemapHoldCount++;
+            dirRemapHoldCount += frameDelta;
           } else {
             dirRemapCandidate = { key, index: maxAxis, sign };
-            dirRemapHoldCount = 1;
+            dirRemapHoldCount = frameDelta;
           }
-          if (dirRemapHoldCount >= 15) {
+          if (dirRemapHoldCount >= 15 - FRAME_EPS) {
             const neutralVal = dirRemapBaseline ? (dirRemapBaseline[dirRemapCandidate.index] ?? 0) : 0;
             const currVal    = gp.axes[dirRemapCandidate.index];
             if (Math.abs(neutralVal) > 1.0) {
@@ -770,17 +811,17 @@ function poll() {
     const input = { dir: getDirection(gp), buttons: getButtons(gp) };
 
     if (inputsEqual(input, currentEntry?.input)) {
-      currentEntry.duration++;
+      currentEntry.duration += frameDelta;
     } else {
       if (currentEntry) {
         history.unshift(currentEntry);
         if (history.length > displayRows) history.pop();
       }
-      currentEntry = { input, duration: 1 };
+      currentEntry = { input, duration: frameDelta };
     }
 
-    if (prevInput) updateSADetection(input, prevInput);
-    frameCount++;
+    frameCount += frameDelta;
+    if (prevInput) updateSADetection(input, prevInput, frameDelta);
     prevInput = input;
 
     renderCurrent(input);
@@ -814,10 +855,11 @@ const CHARACTERS = {
 
 const SA_MOT_WINDOW = 10; // confirmed from 3s-decomp cmd_data.c
 const SA_BTN_WINDOW = 10; // confirmed from 3s-decomp cmd_data.c
+const FRAME_EPS = 1e-6; // tolerance for float-accumulated frame counters landing exactly on a window boundary
 
 const isDownDir = d => d === 1 || d === 2 || d === 3;
-const isFwdDir  = d => d === 3 || d === 6 || d === 9;
-const isBackDir = d => d === 1 || d === 4 || d === 7;
+const isFwdDir  = d => d === 3 || d === 6; // Peter: 9 must never substitute for 3/6 in DQCF, either loop
+const isBackDir = d => d === 1 || d === 4; // mirrored for QCB: 7 must never substitute for 1/4
 
 let sgsActive    = localStorage.getItem('sf3_sgs') === 'true';
 let kkzActive    = localStorage.getItem('sf3_kkz') === 'true';
@@ -832,10 +874,27 @@ const saMotQCF = { state: 'IDLE', frames: 0, entry: null, markedEntries: [], typ
 const saMotQCB = { state: 'IDLE', frames: 0, entry: null, markedEntries: [], type: 'DQCF', sawFull: false };
 let saMotPendingSuccess = false;
 let frameCount = 0;
+let lastTs = null;
+const GAP_RESET_MS = 250; // wall-clock gap (disconnect, backgrounded tab, stall) beyond which we reset trackers instead of fabricating elapsed frames
 const cardinal720Buffer = [];
 const sa720markedEntries = [];
 
 const SA_FWD_DIRS = new Set([1, 3, 4, 6, 7, 9]);
+
+function resetTrackersForGap() {
+  prevInput = null;
+  currentEntry = null;
+  sgs.state = 'IDLE'; sgs.frames = 0; sgs.entry = null; sgs.lp2Valid = false; sgs.pendingFail = null;
+  kkz.state = 'IDLE'; kkz.frames = 0; kkz.entry = null;
+  saMotQCF.state = 'IDLE'; saMotQCF.frames = 0; saMotQCF.entry = null; saMotQCF.sawFull = false;
+  saMotQCB.state = 'IDLE'; saMotQCB.frames = 0; saMotQCB.entry = null; saMotQCB.sawFull = false;
+  cardinal720Buffer.length = 0;
+}
+
+function boundMarkedEntries(arr) {
+  const max = displayRows;
+  if (arr.length > max) arr.splice(0, arr.length - max);
+}
 
 function toggleSAPanel() {
   saPanelOpen = !saPanelOpen;
@@ -843,44 +902,49 @@ function toggleSAPanel() {
 }
 
 function saMotMarkFail(m) {
-  if (m.entry) { m.entry.saFail = m.type || 'DQCF'; m.markedEntries.push(m.entry); }
+  if (m.entry) {
+    m.entry.saFail = m.type || 'DQCF';
+    m.markedEntries.push(m.entry);
+    boundMarkedEntries(m.markedEntries);
+  }
   m.state = 'IDLE'; m.frames = 0; m.entry = null; m.sawFull = false;
 }
 
 function saMotSuccess(m) {
-  for (const e of m.markedEntries) delete e.saFail;
+  // Peter: finalized failures must persist until normal history eviction - a later
+  // success (or a tracker switch, which also calls this) must NOT un-mark them.
   m.markedEntries = [];
   m.state = 'IDLE'; m.frames = 0; m.entry = null; m.sawFull = false;
 }
 
-function updateSAMot(m, enterDown, enterSide, btnPressed, isFullDir) {
-  m.frames++;
+function updateSAMot(m, enterDown, enterSide, btnPressed, isFullDir, frameDelta) {
+  m.frames += frameDelta;
   switch (m.state) {
     case 'IDLE':
       if (enterDown)             { m.state = 'SAW_D1'; m.frames = 0; }
       break;
     case 'SAW_D1':
-      if (m.frames > SA_MOT_WINDOW) { m.state = 'IDLE'; }
-      else if (enterSide)            { m.state = 'SAW_S1'; m.frames = 0; m.sawFull = false; }
+      if (m.frames > SA_MOT_WINDOW + FRAME_EPS) { m.state = 'IDLE'; }
+      else if (enterSide)            { m.state = 'SAW_S1'; m.frames = 0; m.sawFull = isFullDir; } // same-tick direct 6/4 entry (e.g. "26") must count immediately
       break;
     case 'SAW_S1':
       if (isFullDir) m.sawFull = true;
-      if (m.frames > SA_MOT_WINDOW) { m.state = 'IDLE'; m.sawFull = false; }
+      if (m.frames > SA_MOT_WINDOW + FRAME_EPS) { m.state = 'IDLE'; m.sawFull = false; }
       else if (enterDown && m.sawFull)  { m.state = 'SAW_D2'; m.frames = 0; m.entry = currentEntry; }
-      else if (enterDown && !m.sawFull) { if (currentEntry) { currentEntry.saFail = m.type; m.markedEntries.push(currentEntry); } m.state = 'IDLE'; m.frames = 0; m.sawFull = false; }
+      else if (enterDown && !m.sawFull) { if (currentEntry) { currentEntry.saFail = m.type; m.markedEntries.push(currentEntry); boundMarkedEntries(m.markedEntries); } m.state = 'IDLE'; m.frames = 0; m.sawFull = false; }
       break;
     case 'SAW_D2':
-      if (m.frames > SA_MOT_WINDOW)    { saMotMarkFail(m); }
+      if (m.frames > SA_MOT_WINDOW + FRAME_EPS) { saMotMarkFail(m); }
       else if (enterSide && btnPressed) { saMotPendingSuccess = true; }
       else if (enterSide)              { m.state = 'WAIT_BTN';      m.frames = 0; m.entry = currentEntry; }
       else if (btnPressed)             { m.state = 'BTN_THEN_SIDE'; m.frames = 0; m.entry = currentEntry; }
       break;
     case 'BTN_THEN_SIDE':
-      if (m.frames > SA_BTN_WINDOW) { saMotMarkFail(m); }
+      if (m.frames > SA_BTN_WINDOW + FRAME_EPS) { saMotMarkFail(m); }
       else if (enterSide)           { saMotPendingSuccess = true; }
       break;
     case 'WAIT_BTN':
-      if (m.frames > SA_BTN_WINDOW)  { saMotMarkFail(m); }
+      if (m.frames > SA_BTN_WINDOW + FRAME_EPS) { saMotMarkFail(m); }
       else if (btnPressed)           { saMotPendingSuccess = true; }
       break;
   }
@@ -916,8 +980,7 @@ function toggle720P() {
   sa720pActive = !sa720pActive;
   localStorage.setItem('sf3_720p', sa720pActive);
   cardinal720Buffer.length = 0;
-  for (const e of sa720markedEntries) delete e.saFail;
-  sa720markedEntries.length = 0;
+  sa720markedEntries.length = 0; // bookkeeping reset only - finalized saFail marks persist until history eviction
   if (sa720pActive) {
     sgsActive = false; localStorage.setItem('sf3_sgs', false);
     sgs.state='IDLE'; sgs.frames=0; sgs.entry=null; sgs.lp2Valid=false; sgs.markedEntries=[]; sgs.pendingFail=null;
@@ -933,13 +996,17 @@ function toggle720P() {
   updateSAInfo();
 }
 
-function setSASlot(slot) {
-  saSlot = saSlot === slot ? 0 : slot;
+function applySASlot(newSlot) {
+  saSlot = newSlot;
   localStorage.setItem('sf3_sa_slot', saSlot);
   if (saSlot > 0) deactivate720P();
   saMotSuccess(saMotQCF); saMotSuccess(saMotQCB);
   for (let i=1; i<=2; i++) document.getElementById('sa-btn-'+i)?.classList.toggle('active', i===saSlot);
   updateSAInfo();
+}
+
+function setSASlot(slot) {
+  applySASlot(saSlot === slot ? 0 : slot);
 }
 
 function updateSAInfo() {
@@ -960,8 +1027,7 @@ function updateSAInfo() {
 }
 
 function clearSGSFailMarks() {
-  for (const e of sgs.markedEntries) { delete e.saFail; }
-  sgs.markedEntries = [];
+  sgs.markedEntries = []; // bookkeeping reset only - finalized saFail marks persist until history eviction
 }
 
 function saMarkFail(m) {
@@ -971,28 +1037,30 @@ function saMarkFail(m) {
     } else {
       m.entry.saFail = m.type || 'FAIL';
       m.markedEntries.push(m.entry);
+      boundMarkedEntries(m.markedEntries);
     }
   }
   m.state = 'IDLE'; m.frames = 0; m.entry = null; m.lp2Valid = false;
 }
 
-function updateSGS(ev) {
+function updateSGS(ev, frameDelta) {
   if (sgs.pendingFail) {
     sgs.pendingFail.countdown--;
     if (sgs.pendingFail.countdown <= 0) {
       sgs.pendingFail.entry.saFail = 'SGS';
       sgs.markedEntries.push(sgs.pendingFail.entry);
+      boundMarkedEntries(sgs.markedEntries);
       sgs.pendingFail = null;
     }
   }
-  sgs.frames++;
+  sgs.frames += frameDelta;
   switch (sgs.state) {
     case 'IDLE':
       if (ev.sgsLp) { sgs.state = 'WAIT_LP2'; sgs.frames = 0; }
       break;
     case 'WAIT_LP2':
       if (ev.lpRelease)        { sgs.frames = 0; break; }
-      if (sgs.frames >= 11)    { sgs.state = 'IDLE'; }
+      if (sgs.frames >= 11 - FRAME_EPS)    { sgs.state = 'IDLE'; }
       else if (ev.sgsLp)        { sgs.state = 'WAIT_FWD'; sgs.frames = 0; sgs.entry = null; sgs.lp2Valid = true; }
       break;
     case 'WAIT_FWD':
@@ -1002,12 +1070,12 @@ function updateSGS(ev) {
         else { sgs.entry = currentEntry; }
         break;
       }
-      if (sgs.frames >= 11)    { saMarkFail(sgs); }
+      if (sgs.frames >= 11 - FRAME_EPS)    { saMarkFail(sgs); }
       else if (ev.fwd)          { sgs.state = 'WAIT_LK'; sgs.frames = 0; sgs.entry = null; }
       break;
     case 'WAIT_LK':
       if (ev.fwdRelease)       { sgs.frames = 0; sgs.entry = currentEntry; }
-      if (sgs.frames >= 15)    { saMarkFail(sgs); }
+      if (sgs.frames >= 15 - FRAME_EPS)    { saMarkFail(sgs); }
       else if (ev.sgsLk)        { sgs.state = 'WAIT_HP'; sgs.frames = 0; sgs.entry = null; }
       break;
     case 'WAIT_HP':
@@ -1018,29 +1086,29 @@ function updateSGS(ev) {
         break;
       }
       if (ev.lkRelease)        { sgs.frames = 0; sgs.entry = currentEntry; break; }
-      if (sgs.frames >= 11)    { saMarkFail(sgs); }
+      if (sgs.frames >= 11 - FRAME_EPS)    { saMarkFail(sgs); }
       break;
   }
 }
 
-function updateKKZ(ev) {
-  kkz.frames++;
+function updateKKZ(ev, frameDelta) {
+  kkz.frames += frameDelta;
   switch (kkz.state) {
     case 'IDLE':
       if (ev.down) { kkz.state = 'GOT_D1'; kkz.frames = 0; }
       break;
     case 'GOT_D1':
       if (ev.downRelease)      { kkz.frames = 0; break; }
-      if (kkz.frames >= 8)      { kkz.state = 'IDLE'; }
+      if (kkz.frames >= 8 - FRAME_EPS)      { kkz.state = 'IDLE'; }
       else if (ev.down)         { kkz.state = 'GOT_D2'; kkz.frames = 0; kkz.entry = currentEntry; }
       break;
     case 'GOT_D2':
       if (ev.downRelease)      { kkz.frames = 0; break; }
-      if (kkz.frames >= 8)      { saMarkFail(kkz); }
+      if (kkz.frames >= 8 - FRAME_EPS)      { saMarkFail(kkz); }
       else if (ev.down)         { kkz.state = 'WAIT_PPP'; kkz.frames = 0; }
       break;
     case 'WAIT_PPP':
-      if (kkz.frames >= 11)     { saMarkFail(kkz); }
+      if (kkz.frames >= 11 - FRAME_EPS)     { saMarkFail(kkz); }
       else if (ev.pp)            { kkz.state = 'IDLE'; kkz.frames = 0; kkz.entry = null; }
       break;
   }
@@ -1070,7 +1138,7 @@ function update720P(ev, input, prev) {
     cardinal720Buffer.push({ dir: input.dir, f: frameCount });
   }
   // Prune entries older than 11 frames
-  while (cardinal720Buffer.length && frameCount - cardinal720Buffer[0].f > 11) {
+  while (cardinal720Buffer.length && frameCount - cardinal720Buffer[0].f > 11 + FRAME_EPS) {
     cardinal720Buffer.shift();
   }
   // Check on punch press
@@ -1086,18 +1154,18 @@ function update720P(ev, input, prev) {
   // Condition B
   const condB = check720CondB(buf);
   if (condA || condB) {
-    for (const e of sa720markedEntries) delete e.saFail;
-    sa720markedEntries.length = 0;
+    sa720markedEntries.length = 0; // bookkeeping reset only - finalized saFail marks persist until history eviction
     cardinal720Buffer.length = 0;
   } else {
     if (currentEntry) {
       currentEntry.saFail = '720+P';
       sa720markedEntries.push(currentEntry);
+      boundMarkedEntries(sa720markedEntries);
     }
   }
 }
 
-function updateSADetection(input, prev) {
+function updateSADetection(input, prev, frameDelta) {
   const ev = {
     lp:   input.buttons.rawLP && !prev.buttons.rawLP,
     sgsLp: input.buttons.rawLP && !prev.buttons.rawLP && !(
@@ -1160,18 +1228,18 @@ function updateSADetection(input, prev) {
     fwd:         SA_FWD_DIRS.has(input.dir) && !SA_FWD_DIRS.has(prev.dir),
     isForward:   SA_FWD_DIRS.has(input.dir),
   };
-  if (sgsActive) updateSGS(ev);
-  if (kkzActive) updateKKZ(ev);
+  if (sgsActive) updateSGS(ev, frameDelta);
+  if (kkzActive) updateKKZ(ev, frameDelta);
   if (sa720pActive) update720P(ev, input, prev);
   if (saSlot > 0) {
     const sa = CHARACTERS['GOUKI'].sa[saSlot-1];
     const btnPressed = sa.button === 'P' ? ev.btnP : ev.btnK;
     saMotQCF.type = saMotQCB.type = 'DQCF+' + sa.button;
     saMotPendingSuccess = false;
-    const isFwd6  = (input.dir === 6 || input.dir === 9);
-    const isBack4 = (input.dir === 4 || input.dir === 7);
-    updateSAMot(saMotQCF, ev.dirEnterDown, ev.dirEnterFwd,  btnPressed, isFwd6);
-    updateSAMot(saMotQCB, ev.dirEnterDown, ev.dirEnterBack, btnPressed, isBack4);
+    const isFwd6  = (input.dir === 6); // Peter: 9 must never substitute for pure 6 in the first loop
+    const isBack4 = (input.dir === 4); // mirrored for QCB: 7 must never substitute for pure 4
+    updateSAMot(saMotQCF, ev.dirEnterDown, ev.dirEnterFwd,  btnPressed, isFwd6, frameDelta);
+    updateSAMot(saMotQCB, ev.dirEnterDown, ev.dirEnterBack, btnPressed, isBack4, frameDelta);
     if (saMotPendingSuccess) {
       saMotSuccess(saMotQCF); saMotSuccess(saMotQCB);
     }
@@ -1185,7 +1253,7 @@ document.getElementById('sa-btn-sgs')?.classList.toggle('active', sgsActive);
 document.getElementById('sa-btn-kkz')?.classList.toggle('active', kkzActive);
 document.getElementById('sa-btn-720p')?.classList.toggle('active', sa720pActive);
 updateSAInfo();
-if (_savedSlot > 0) setSASlot(_savedSlot);
+if (_savedSlot > 0) applySASlot(_savedSlot);
 setHistRows(displayRows);
 requestAnimationFrame(poll);
 </script>

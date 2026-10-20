@@ -48,11 +48,19 @@ When an attempt fails, a colored label appears on the history entry where the in
 | `!DQCF+K` | DQCF+K motion incomplete |
 | `!720+P` | 720 rotation incomplete |
 
-If the move activates successfully, the **!** is automatically removed.
+A failed attempt's **!** mark is finalized once shown — it stays on that history row until the row scrolls out of history naturally. It is **not** removed by a later, unrelated successful attempt, nor by switching trackers. (This tool only reads gamepad state — it cannot see whether the move actually came out in-game.)
+
+### Timing Notes
+- All frame counts (`f`, motion windows) are elapsed-time **60Hz-equivalents**, not real emulator frames — this tool has no connection to the emulator's own clock.
+- The browser only samples the gamepad once per render callback; a very short input between samples can be missed entirely.
+- Trackers reset on any controller disconnect, and whenever the tab becomes visible again after being backgrounded. A detected sampling stall longer than ~250ms (not tied to disconnect duration) also triggers a reset — rather than guessing what happened during any of these gaps.
 
 ### DQCF Notes
-- The QCF motion **must pass through direction 6** (pure forward). Stopping at diagonal 3 is detected as a failed attempt.
+- Valid shortcuts: `23623` / `21421` (second loop may end on the diagonal) or the full `236236` / `214214`.
+- The **first** loop must pass through the pure direction (`6` for forward, `4` for back) — the upper diagonal (`9`/`7`, i.e. up-forward/up-back) does not count as reaching it, even briefly.
+- The **second** loop accepts its own down-diagonal (`3` for forward, `1` for back) as a valid finish, but **not** the upper diagonal (`9`/`7`) — e.g. `23629` is not a valid finish for the forward motion.
 - Button can be pressed slightly before or after the final direction — all timing is accepted.
+- Once an attempt is marked failed, that mark stays in history — a later, unrelated successful attempt (or switching trackers) does not erase it. It only disappears when that row scrolls out of the history list.
 
 ### 720+P Notes
 - **Exclusive toggle**: activating 720+P disables all other trackers.

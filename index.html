@@ -74,15 +74,72 @@ body {
 }
 .current-top { display: flex; align-items: center; gap: 16px; }
 
-.dir-img {
-  width: 48px; height: 48px;
+.stick-gate {
+  position: relative;
+  width: 64px; height: 64px;
   flex-shrink: 0;
+  border-radius: 50%;
+  background: #0e0e0e;
+  border: 1px solid #2a2a2a;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.stick-trail {
+  position: absolute;
+  left: 0; top: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+}
+.dir-img {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 44px; height: 44px;
+  margin: -22px 0 0 -22px;
   opacity: 0.12;
-  transition: transform 0.05s, opacity 0.05s;
+  /* no transform transition: the ball must follow the sampled direction immediately */
 }
 .btns-section { display: flex; flex-direction: column; gap: 6px; }
 .btns-row { display: flex; gap: 6px; }
-.bc { width: 34px; height: 34px; opacity: 0.15; transition: opacity 0.05s; }
+.bc {
+  position: relative;
+  width: 34px; height: 34px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  border-radius: 50%; /* the button art sits on a round dark halo, not a rectangular frame */
+  display: flex; align-items: center; justify-content: center;
+}
+/* Idle outline: a ring in each button's art colour (sampled from the button images), dimmed.
+   Drawn as a pseudo-element so a pressed slot can drop it without moving anything. */
+.bc::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 50%;
+  border: 2px solid var(--c, #444);
+  opacity: 0.45;
+}
+.bc-blue   { --c: #00a8ff; }
+.bc-yellow { --c: #ecce02; }
+.bc-red    { --c: #ff0000; }
+.bc-tri .lbl { font-size: 10px; letter-spacing: 0; }
+.bc-tri::before {
+  border: 0;
+  background: conic-gradient(#00a8ff 0 33.3%, #ecce02 0 66.6%, #ff0000 0);
+  /* closest-side: 100% is the ring's outer radius, so the visible stroke is exactly 2px like the solid rings */
+  -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  mask: radial-gradient(closest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+}
+.bc .lbl { font-size: 11px; font-weight: bold; color: #666; letter-spacing: 0.5px; }
+.bc img {
+  position: absolute;
+  left: -1px; top: -1px;
+  width: 34px; height: 34px;
+  visibility: hidden;
+}
+/* Pressed: the slot shows its button image instead of its text label (same geometry, no outline). */
+.bc.on::before { display: none; }
+.bc.on img { visibility: visible; }
+.bc.on .lbl { visibility: hidden; }
 
 /* ── History ── */
 .hist-header {
@@ -225,20 +282,23 @@ body {
 
 <div class="current-section">
   <div class="current-top">
-    <img src="./layout/inputhistory/stick-center.png" class="dir-img" id="dirImg">
+    <div class="stick-gate" id="stickGate">
+      <canvas class="stick-trail" id="stickTrail"></canvas>
+      <img src="./layout/inputhistory/stick-center.png" class="dir-img" id="dirImg">
+    </div>
 
     <div class="btns-section">
       <div class="btns-row">
-        <img src="./layout/inputhistory/input-lp.png" class="bc" id="bc-LP">
-        <img src="./layout/inputhistory/input-mp.png" class="bc" id="bc-MP">
-        <img src="./layout/inputhistory/input-hp.png" class="bc" id="bc-HP">
-        <img src="./layout/inputhistory/input-3p.png" class="bc" id="bc-3P">
+        <div class="bc bc-blue" id="bc-LP"><span class="lbl">LP</span><img src="./layout/inputhistory/input-lp.png"></div>
+        <div class="bc bc-yellow" id="bc-MP"><span class="lbl">MP</span><img src="./layout/inputhistory/input-mp.png"></div>
+        <div class="bc bc-red" id="bc-HP"><span class="lbl">HP</span><img src="./layout/inputhistory/input-hp.png"></div>
+        <div class="bc bc-tri" id="bc-3P"><span class="lbl">PPP</span><img src="./layout/inputhistory/input-3p.png"></div>
       </div>
       <div class="btns-row">
-        <img src="./layout/inputhistory/input-lk.png" class="bc" id="bc-LK">
-        <img src="./layout/inputhistory/input-mk.png" class="bc" id="bc-MK">
-        <img src="./layout/inputhistory/input-hk.png" class="bc" id="bc-HK">
-        <img src="./layout/inputhistory/input-3k.png" class="bc" id="bc-3K">
+        <div class="bc bc-blue" id="bc-LK"><span class="lbl">LK</span><img src="./layout/inputhistory/input-lk.png"></div>
+        <div class="bc bc-yellow" id="bc-MK"><span class="lbl">MK</span><img src="./layout/inputhistory/input-mk.png"></div>
+        <div class="bc bc-red" id="bc-HK"><span class="lbl">HK</span><img src="./layout/inputhistory/input-hk.png"></div>
+        <div class="bc bc-tri" id="bc-3K"><span class="lbl">KKK</span><img src="./layout/inputhistory/input-3k.png"></div>
       </div>
     </div>
   </div>
@@ -315,7 +375,7 @@ body {
   <button class="reset-btn" onclick="resetMapping()">Reset buttons to defaults</button>
 
   <div class="map-title" style="margin-top:10px; margin-bottom:6px">DIRECTION MAPPING</div>
-  <div class="map-title" style="font-size:9px; color:#3a3a3a; margin-bottom:8px">Click then push stick in direction</div>
+  <div class="map-title" style="margin-bottom:8px">Click then push stick in direction</div>
   <div class="map-grid">
     <div class="map-row">
       <span class="map-label">↑</span>
@@ -530,9 +590,6 @@ function getHatDirection(gp) {
   const v       = gp.axes[axisIdx] ?? 0;
   const neutralV = dirMapping.up.neutral ?? 999;
 
-  // Near neutral sentinel value → no input
-  if (Math.abs(v - neutralV) < 1.5) return 5;
-
   // Sort the 4 cardinal values ascending (= clockwise order for this encoding)
   const cardinals = [
     { numpad: 8, val: dirMapping.up.value },
@@ -543,6 +600,11 @@ function getHatDirection(gp) {
 
   // step45: half the gap between adjacent cardinals (= 45° step)
   const step45 = (cardinals[1].val - cardinals[0].val) / 2;
+
+  // Near the neutral sentinel -> no input. The window must stay narrower than one 45-degree step:
+  // with the common encoding the neutral value (1.286) sits only one step past the last diagonal
+  // (1.0), so a wide window would swallow Down (0.143), Left (0.714) and the diagonals.
+  if (Math.abs(v - neutralV) < step45 / 2) return 5;
 
   // Auto-compute the 4 diagonal values as midpoints between adjacent cardinals
   const diagonals = [
@@ -627,26 +689,22 @@ function updateStatus(connected) {
   document.getElementById('statusText').textContent = connected ? 'Connected' : 'No gamepad';
 }
 
+function setBtnSlot(id, pressed) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('on', !!pressed);
+}
+
 function renderCurrent(input) {
-  const arrow = document.getElementById('dirImg');
-  if (input.dir === 5) {
-    arrow.src = `${IMG_BASE}stick-center.png`;
-    arrow.style.opacity = '1';
-    arrow.style.transform = 'rotate(0deg)';
-  } else {
-    arrow.src = `${IMG_BASE}input-up.png`;
-    arrow.style.opacity = '1';
-    arrow.style.transform = `rotate(${DIR_ROT[input.dir]}deg)`;
-  }
+  setStickBall(input.dir);
   const b = input.buttons;
-  document.getElementById('bc-LP').style.opacity = b.rawLP ? '1' : '0.15';
-  document.getElementById('bc-MP').style.opacity = b.rawMP ? '1' : '0.15';
-  document.getElementById('bc-HP').style.opacity = b.rawHP ? '1' : '0.15';
-  document.getElementById('bc-LK').style.opacity = b.rawLK ? '1' : '0.15';
-  document.getElementById('bc-MK').style.opacity = b.rawMK ? '1' : '0.15';
-  document.getElementById('bc-HK').style.opacity = b.rawHK ? '1' : '0.15';
-  document.getElementById('bc-3P').style.opacity = b.p3 ? '1' : '0.15';
-  document.getElementById('bc-3K').style.opacity = b.k3 ? '1' : '0.15';
+  setBtnSlot('bc-LP', b.rawLP);
+  setBtnSlot('bc-MP', b.rawMP);
+  setBtnSlot('bc-HP', b.rawHP);
+  setBtnSlot('bc-LK', b.rawLK);
+  setBtnSlot('bc-MK', b.rawMK);
+  setBtnSlot('bc-HK', b.rawHK);
+  setBtnSlot('bc-3P', b.p3);
+  setBtnSlot('bc-3K', b.k3);
 }
 
 let lastRenderSig = null;
@@ -809,6 +867,7 @@ function poll() {
     }
 
     const input = { dir: getDirection(gp), buttons: getButtons(gp) };
+    updateStickTrail(input.dir, now);
 
     if (inputsEqual(input, currentEntry?.input)) {
       currentEntry.duration += frameDelta;
@@ -824,14 +883,22 @@ function poll() {
     if (prevInput) updateSADetection(input, prevInput, frameDelta);
     prevInput = input;
 
+    stickActive = true;
     renderCurrent(input);
     renderHistory();
 
 
   } else {
     updateStatus(false);
+    if (stickActive) {
+      // Controller gone without a usable sample: drop any trail and recentre the ball.
+      resetStickTrail();
+      setStickBall(5);
+      stickActive = false;
+    }
   }
 
+  drawStickTrail(now);
   requestAnimationFrame(poll);
 }
 
@@ -881,9 +948,84 @@ const sa720markedEntries = [];
 
 const SA_FWD_DIRS = new Set([1, 3, 4, 6, 7, 9]);
 
+// ── Joystick ball + direction trail ──
+// Display only: reads the sampled direction, never touches history or the SA trackers.
+const STICK_GATE      = 64;  // px, must match .stick-gate
+const STICK_TRAVEL    = 16;  // px, ball-centre travel (gate radius minus ball radius and margin)
+const STICK_TRAIL_MS  = 10 * (1000 / 60); // wall-clock fade time of one segment: 10 frames at 60 Hz (~166.7 ms)
+const STICK_TRAIL_MAX = 16;  // bound on live segments
+const STICK_TRAIL_W   = 8;   // px
+const STICK_TRAIL_A0  = 0.45; // starting alpha, fades linearly to 0 over STICK_TRAIL_MS
+const STICK_TRAIL_RGB = '233,233,228'; // warm white, sampled from the ball highlight
+const STICK_UNIT = { 1:[-1,1], 2:[0,1], 3:[1,1], 4:[-1,0], 5:[0,0], 6:[1,0], 7:[-1,-1], 8:[0,-1], 9:[1,-1] };
+
+let stickPrevDir = null;   // last sampled direction, null after any reset
+let stickSegs    = [];     // { from:[x,y], to:[x,y], t0 }
+let stickActive  = false;  // a controller sample has been shown since the last recentre
+let stickDirty   = false;  // canvas holds pixels that must be cleared
+let stickDpr     = 0;
+
+function stickPos(dir) {
+  const u = STICK_UNIT[dir] || STICK_UNIT[5];
+  const k = (u[0] && u[1]) ? Math.SQRT1_2 : 1; // round gate: diagonals sit on the circle
+  return [u[0] * k * STICK_TRAVEL, u[1] * k * STICK_TRAVEL];
+}
+
+function setStickBall(dir) {
+  const ball = document.getElementById('dirImg');
+  if (!ball) return;
+  const p = stickPos(dir);
+  ball.style.opacity = '1';
+  ball.style.transform = `translate(${p[0]}px, ${p[1]}px)`;
+}
+
+function resetStickTrail() {
+  stickPrevDir = null;
+  if (stickSegs.length) stickDirty = true;
+  stickSegs.length = 0;
+}
+
+function updateStickTrail(dir, now) {
+  // Compares direction only, so held input and button-only changes add nothing.
+  if (stickPrevDir !== null && dir !== stickPrevDir) {
+    stickSegs.push({ from: stickPos(stickPrevDir), to: stickPos(dir), t0: now });
+    if (stickSegs.length > STICK_TRAIL_MAX) stickSegs.shift();
+  }
+  stickPrevDir = dir;
+}
+
+function drawStickTrail(now) {
+  stickSegs = stickSegs.filter(s => now - s.t0 < STICK_TRAIL_MS);
+  if (!stickSegs.length && !stickDirty) return;
+  const canvas = document.getElementById('stickTrail');
+  const ctx = canvas && canvas.getContext ? canvas.getContext('2d') : null;
+  if (!ctx) { stickDirty = false; return; } // drawing is optional, never break input handling
+  const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+  if (dpr !== stickDpr) {
+    stickDpr = dpr;
+    canvas.width  = Math.round(STICK_GATE * dpr);
+    canvas.height = Math.round(STICK_GATE * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, STICK_GATE, STICK_GATE);
+  const c = STICK_GATE / 2;
+  ctx.lineWidth = STICK_TRAIL_W;
+  ctx.lineCap = 'round';
+  for (const s of stickSegs) {
+    const a = STICK_TRAIL_A0 * (1 - (now - s.t0) / STICK_TRAIL_MS);
+    ctx.strokeStyle = `rgba(${STICK_TRAIL_RGB},${a.toFixed(3)})`;
+    ctx.beginPath();
+    ctx.moveTo(c + s.from[0], c + s.from[1]);
+    ctx.lineTo(c + s.to[0], c + s.to[1]);
+    ctx.stroke();
+  }
+  stickDirty = stickSegs.length > 0;
+}
+
 function resetTrackersForGap() {
   prevInput = null;
   currentEntry = null;
+  resetStickTrail();
   sgs.state = 'IDLE'; sgs.frames = 0; sgs.entry = null; sgs.lp2Valid = false; sgs.pendingFail = null;
   kkz.state = 'IDLE'; kkz.frames = 0; kkz.entry = null;
   saMotQCF.state = 'IDLE'; saMotQCF.frames = 0; saMotQCF.entry = null; saMotQCF.sawFull = false;

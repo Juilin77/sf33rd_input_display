@@ -268,7 +268,7 @@ body {
 <body>
 
 <div class="header">
-  <span class="title">INPUT DISPLAY_v0.5</span>
+  <span class="title">INPUT DISPLAY_v0.6</span>
   <div class="status">
     <div class="status-dot" id="statusDot"></div>
     <span id="statusText">No gamepad</span>
@@ -731,7 +731,7 @@ function renderHistory() {
   // tick), not on every rAF callback.
   const sig = isP2 + '|' + displayRows + '|' + shown.map(e =>
     e.input.dir + ':' + BTN_NAMES.filter(n => e.input.buttons[n]).join(',') + ':' +
-    (e.duration < 1000 ? Math.floor(e.duration) : -1) + ':' + (e.saFail || '')
+    (e.duration < 1000 ? displayFrames(e.duration) : -1) + ':' + (e.saFail || '')
   ).join('|');
   if (sig === lastRenderSig) return;
   lastRenderSig = sig;
@@ -749,7 +749,7 @@ function renderHistory() {
     // 1P: buttons flow left→right; 2P: buttons pushed right (toward direction)
     const btnsEl = `<span class="hist-btns" style="justify-content:${isP2 ? 'flex-end' : 'flex-start'}">${btnsHtml}</span>`;
 
-    const durText = e.duration < 1000 ? Math.floor(e.duration) + 'f' : '...';
+    const durText = e.duration < 1000 ? displayFrames(e.duration) + 'f' : '...';
     // 1P: number right-aligned (toward direction); 2P: left-aligned (toward direction)
     const durEl   = `<span class="hist-dur" style="text-align:${isP2 ? 'left' : 'right'}">${durText}</span>`;
 
@@ -900,6 +900,12 @@ function poll() {
 
   drawStickTrail(now);
   requestAnimationFrame(poll);
+}
+
+// Displayed frame count for a history row. The stored duration keeps the real elapsed time
+// (60 Hz-equivalent, fractional on >60 Hz displays); a recorded row never shows less than 1f.
+function displayFrames(duration) {
+  return Math.max(1, Math.floor(duration));
 }
 
 function setHistRows(val) {

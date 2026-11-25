@@ -18,7 +18,8 @@ A browser-based input display for Street Fighter III 3rd Strike. Shows your joys
 
 ## Features
 
-- Real-time direction + button display
+- Real-time direction + button display. The stick is a ball in a round gate that follows the sampled direction and leaves a short (~167 ms, 10 frames at 60 Hz) fading trail on each direction change
+- Eight-button panel (LP MP HP PPP / LK MK HK KKK) shows the button name when idle and the button image when pressed
 - Input history (last 20–35 entries, configurable)
 - 1P / 2P layout toggle
 - Super Art Input Tracker — detects SA input attempts and marks failed inputs in history
